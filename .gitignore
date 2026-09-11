@@ -1,0 +1,22 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# PyInstaller build artifacts (배포용 exe는 GitHub Release에만 업로드, 저장소에는 포함하지 않음)
+build/
+dist/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor
+.vscode/
+.idea/
+
+# 로그/임시파일
+*.log
+*.tmp
