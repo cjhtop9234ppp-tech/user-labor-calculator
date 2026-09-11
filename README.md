@@ -44,7 +44,7 @@ STEP 1(H단가 계산) → STEP 2(기준금액·시간·적용율 입력) → �
 
 1. 이 저장소의 [Releases](../../releases) 페이지로 이동
 2. 최신 버전(v1.0.0) 선택
-3. Assets에서 `사용자공임계산기.exe` 다운로드
+3. Assets에서 `UserLaborCalculator-v1.0.0.exe` 다운로드
 4. 다운로드한 파일을 더블클릭해서 실행
 
 Python이나 다른 프로그램을 설치할 필요가 없습니다.
