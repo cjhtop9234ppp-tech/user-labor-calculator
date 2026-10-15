@@ -22,7 +22,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='사용자공임계산기',
+    name='사용자공임계산기_v1.1.0',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,

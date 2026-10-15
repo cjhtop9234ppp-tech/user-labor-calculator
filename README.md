@@ -16,6 +16,8 @@
 - STEP 2: 기준금액 + 여러 시간(H) 항목 합산 + 적용율(%)을 반영해 최종 결과값 계산
 - 시간(H) 항목은 "+ 시간 추가" 버튼으로 필요한 만큼 추가/삭제 가능
 - 입력값을 바꾸면 버튼 없이 즉시 재계산
+- (exe 버전) VAT 계산기: 공급가액 ↔ VAT 합산금액 양방향 계산, 클릭 한 번으로 복사
+- (exe 버전) 기본 계산기: 사칙연산, 키보드 입력·붙여넣기 지원
 - Windows 실행파일(.exe) 버전과 웹 브라우저(index.html) 버전 두 가지 제공
 
 ## 프로그램 동작 흐름
@@ -43,8 +45,8 @@ STEP 1(H단가 계산) → STEP 2(기준금액·시간·적용율 입력) → �
 ### 방법 1. 실행파일(exe) 사용 — 가장 간편함
 
 1. 이 저장소의 [Releases](../../releases) 페이지로 이동
-2. 최신 버전(v1.0.0) 선택
-3. Assets에서 `UserLaborCalculator-v1.0.0.exe` 다운로드
+2. 최신 버전(v1.1.0) 선택
+3. Assets에서 `UserLaborCalculator-v1.1.0.exe` 다운로드
 4. 다운로드한 파일을 더블클릭해서 실행
 
 Python이나 다른 프로그램을 설치할 필요가 없습니다.
@@ -79,7 +81,7 @@ python labor_calculator.py
 ### exe 다시 빌드하기
 
 ```bash
-python -m PyInstaller --onefile --windowed --name "사용자공임계산기" labor_calculator.py
+python -m PyInstaller --onefile --windowed --name "사용자공임계산기_v1.1.0" labor_calculator.py
 ```
 
 빌드 결과물은 `dist/` 폴더에 생성됩니다.
@@ -123,7 +125,7 @@ python -m PyInstaller --onefile --windowed --name "사용자공임계산기" lab
 
 ## 버전
 
-v1.0.0 — [CHANGELOG.md](CHANGELOG.md) 참고
+v1.1.0 — [CHANGELOG.md](CHANGELOG.md) 참고
 
 ## 라이선스
 
