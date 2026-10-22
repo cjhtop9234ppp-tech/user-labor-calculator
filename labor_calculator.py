@@ -4,11 +4,14 @@ index.html 과 동일한 계산 로직(반올림 시점 포함)을 tkinter GUI�
 """
 from __future__ import annotations
 
+import json
+import os
 import tkinter as tk
 from decimal import Decimal, InvalidOperation, localcontext
+from pathlib import Path
 from tkinter import ttk
 
-__version__ = "1.1.0"
+__version__ = "1.2.0"
 
 INK = "#1c2b26"
 PAPER = "#f6f4ee"
@@ -38,6 +41,31 @@ def fmt_num(n: float, digits: int) -> str:
 
 
 VAT_RATE = 1.1  # 부가가치세 10% 기준
+
+
+def _settings_path() -> Path:
+    base = os.environ.get("APPDATA") or str(Path.home())
+    return Path(base) / "UserLaborCalculator" / "settings.json"
+
+
+def load_settings() -> dict:
+    try:
+        data = json.loads(_settings_path().read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def save_settings(data: dict) -> None:
+    # 마지막 입력값 저장은 편의 기능이라, 저장 실패가 계산을 막으면 안 된다.
+    path = _settings_path()
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(".tmp")
+        tmp.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+        tmp.replace(path)
+    except OSError:
+        pass
 
 
 def fit_to_content(win: tk.Misc, min_width: int = 0):
@@ -352,6 +380,8 @@ class LaborCalculatorApp:
 
         self.time_rows: list[tuple[tk.Frame, tk.StringVar]] = []
         self._calc_win: tk.Toplevel | None = None
+        self._vat_win: tk.Toplevel | None = None
+        self.settings = load_settings()
 
         self._build_style()
         self._build_header()
@@ -567,7 +597,13 @@ class LaborCalculatorApp:
 
     # ---- 이벤트 계산기: 공급가액/VAT 합산금액 ----
     def _open_vat_calculator(self):
+        if self._vat_win is not None and self._vat_win.winfo_exists():
+            self._vat_win.deiconify()
+            self._vat_win.lift()
+            self._vat_win.focus_force()
+            return
         win = tk.Toplevel(self.root)
+        self._vat_win = win
         win.title("공급가액 및 VAT 합산금액 산출")
         win.configure(bg=PAPER)
         win.resizable(False, False)
@@ -583,9 +619,14 @@ class LaborCalculatorApp:
         inner = tk.Frame(card, bg="#fffdf9", padx=14, pady=12)
         inner.pack(fill="x")
 
-        supply_var = tk.StringVar()
-        vat_total_var = tk.StringVar()
+        saved = self.settings.get("vat", {})
+        supply_var = tk.StringVar(value=str(saved.get("supply", "")))
+        vat_total_var = tk.StringVar(value=str(saved.get("vat_total", "")))
         updating = {"flag": False}
+
+        def persist():
+            self.settings["vat"] = {"supply": supply_var.get(), "vat_total": vat_total_var.get()}
+            save_settings(self.settings)
 
         def make_row(label_text: str, var: tk.StringVar) -> tk.Entry:
             row = tk.Frame(inner, bg="#fffdf9")
@@ -606,8 +647,8 @@ class LaborCalculatorApp:
             copy_btn.pack(side="left", padx=(6, 0))
             return entry
 
-        supply_entry = make_row("공급가액", supply_var)
-        make_row("VAT 합산금액", vat_total_var)
+        vat_entry = make_row("VAT 합산금액", vat_total_var)
+        make_row("공급가액", supply_var)
 
         def on_supply_change(*_args):
             if updating["flag"]:
@@ -619,6 +660,7 @@ class LaborCalculatorApp:
                 vat_total_var.set(f"{round(n * VAT_RATE):,}" if text else "")
             finally:
                 updating["flag"] = False
+            persist()
 
         def on_vat_change(*_args):
             if updating["flag"]:
@@ -630,12 +672,14 @@ class LaborCalculatorApp:
                 supply_var.set(f"{round(n / VAT_RATE):,}" if text else "")
             finally:
                 updating["flag"] = False
+            persist()
 
         supply_var.trace_add("write", on_supply_change)
         vat_total_var.trace_add("write", on_vat_change)
 
         fit_to_content(win, min_width=340)
-        supply_entry.focus_set()
+        vat_entry.focus_set()
+        vat_entry.select_range(0, "end")  # 이전 값이 복원돼 있어도 바로 덮어써서 입력 가능
 
     def _copy_to_clipboard(self, win: tk.Toplevel, var: tk.StringVar, button: tk.Button):
         value = var.get().strip()
