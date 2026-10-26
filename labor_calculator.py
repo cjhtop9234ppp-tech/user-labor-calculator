@@ -11,7 +11,7 @@ from decimal import Decimal, InvalidOperation, localcontext
 from pathlib import Path
 from tkinter import ttk
 
-__version__ = "1.2.0"
+__version__ = "1.3.0"
 
 INK = "#1c2b26"
 PAPER = "#f6f4ee"
@@ -38,6 +38,17 @@ def fmt_won(n: float) -> str:
 
 def fmt_num(n: float, digits: int) -> str:
     return f"{n:,.{digits}f}"
+
+
+def format_amount(text: str) -> str:
+    """입력 문자열에서 숫자/소수점만 남기고 정수부에 천단위 콤마를 넣는다."""
+    cleaned = "".join(ch for ch in text if ch.isdigit() or ch == ".")
+    int_part, dot, frac = cleaned.partition(".")
+    frac = frac.replace(".", "")
+    if not int_part and not dot:
+        return ""
+    int_text = f"{int(int_part):,}" if int_part else "0"
+    return int_text + (dot + frac if dot else "")
 
 
 VAT_RATE = 1.1  # 부가가치세 10% 기준
@@ -373,32 +384,41 @@ class BasicCalculator:
 
 
 class LaborCalculatorApp:
+    CARD_BG = "#fffdf9"
+    MEMO_COUNT = 6
+    MEMO_COLS = 3
+    MEMO_MAX = 50
+    DEFAULT_TIMES = ["1.55", "0.5"]
+
     def __init__(self, root: tk.Tk):
         self.root = root
         root.title(f"사용자공임 산출 계산기(M/H적용) v{__version__}")
         root.configure(bg=PAPER)
 
-        self.time_rows: list[tuple[tk.Frame, tk.StringVar]] = []
-        self._calc_win: tk.Toplevel | None = None
-        self._vat_win: tk.Toplevel | None = None
         self.settings = load_settings()
+        self._calc_win: tk.Toplevel | None = None
+        self._ready = False
+        self.time_rows: list[tuple[tk.Frame, tk.StringVar]] = []
+        self.memo_boxes: list[tk.Text] = []
 
         self._build_style()
         self._build_header()
-        self._build_step1()
-        self._build_step2()
-        self._build_result()
+        self._build_section1()
+        self._build_section_vat()
+        self._build_section_memo()
 
-        self._add_time_row("1.55")
-        self._add_time_row("0.5")
-
+        self._ready = True
         self.calculate()
         self._fit_to_content()
 
     def _fit_to_content(self):
-        fit_to_content(self.root, min_width=420)
+        fit_to_content(self.root, min_width=560)
 
-    # ---- 스타일 ----
+    def _saved(self, key: str) -> dict:
+        value = self.settings.get(key)
+        return value if isinstance(value, dict) else {}
+
+    # ---- 스타일/공통 ----
     def _build_style(self):
         style = ttk.Style(self.root)
         try:
@@ -406,45 +426,52 @@ class LaborCalculatorApp:
         except tk.TclError:
             pass
 
-    def _card(self, step_label: str, title: str) -> tk.Frame:
-        outer = tk.Frame(self.root, bg=PAPER)
-        outer.pack(fill="x", padx=16, pady=(0, 8))
+    def _section_title(self, text: str, hint: str = ""):
+        row = tk.Frame(self.root, bg=PAPER)
+        row.pack(fill="x", padx=16, pady=(8, 4))
+        tk.Label(row, text=text, bg=PAPER, fg=INK,
+                  font=("Malgun Gothic", 11, "bold")).pack(side="left")
+        if hint:
+            tk.Label(row, text=hint, bg=PAPER, fg="#a39c8c",
+                      font=("Malgun Gothic", 8)).pack(side="left", padx=(10, 0), pady=(3, 0))
 
+    def _card(self, parent, step_label: str, title: str):
+        outer = tk.Frame(parent, bg=PAPER)
         badge = tk.Label(
             outer, text=step_label, bg=ACCENT, fg="white",
             font=("Consolas", 8, "bold"), padx=6, pady=1,
         )
         badge.pack(anchor="w")
 
-        card = tk.Frame(outer, bg="#fffdf9", highlightbackground=LINE,
+        card = tk.Frame(outer, bg=self.CARD_BG, highlightbackground=LINE,
                          highlightthickness=1, bd=0)
-        card.pack(fill="x")
+        card.pack(fill="both", expand=True)
 
-        inner = tk.Frame(card, bg="#fffdf9", padx=12, pady=8)
-        inner.pack(fill="x")
+        inner = tk.Frame(card, bg=self.CARD_BG, padx=10, pady=6)
+        inner.pack(fill="both", expand=True)
 
-        tk.Label(inner, text=title, bg="#fffdf9", fg=ACCENT,
-                  font=("Malgun Gothic", 10, "bold")).pack(anchor="w", pady=(0, 6))
-        return inner
+        tk.Label(inner, text=title, bg=self.CARD_BG, fg=ACCENT,
+                  font=("Malgun Gothic", 9, "bold")).pack(anchor="w", pady=(0, 4))
+        return outer, inner
 
     def _labeled_entry(self, parent, label_text: str, var: tk.StringVar, unit: str):
-        row = tk.Frame(parent, bg="#fffdf9")
-        row.pack(fill="x", pady=3)
-        tk.Label(row, text=label_text, bg="#fffdf9", fg=MUTED,
+        row = tk.Frame(parent, bg=self.CARD_BG)
+        row.pack(fill="x", pady=2)
+        tk.Label(row, text=label_text, bg=self.CARD_BG, fg=MUTED,
                   font=("Malgun Gothic", 9), width=7, anchor="w").pack(side="left")
-        entry = tk.Entry(row, textvariable=var, justify="right",
+        entry = tk.Entry(row, textvariable=var, justify="right", width=10,
                           font=("Consolas", 10), fg=NUM,
                           relief="solid", bd=1, highlightthickness=0)
-        entry.pack(side="left", fill="x", expand=True, ipady=2)
+        entry.pack(side="left", ipady=2)
         entry.bind("<KeyRelease>", lambda e: self.calculate())
-        tk.Label(row, text=unit, bg="#fffdf9", fg="#a39c8c",
+        tk.Label(row, text=unit, bg=self.CARD_BG, fg="#a39c8c",
                   font=("Malgun Gothic", 9), width=2).pack(side="left")
         return entry
 
     # ---- 헤더 ----
     def _build_header(self):
         head = tk.Frame(self.root, bg=PAPER)
-        head.pack(fill="x", padx=16, pady=(14, 8))
+        head.pack(fill="x", padx=16, pady=(12, 4))
 
         top_row = tk.Frame(head, bg=PAPER)
         top_row.pack(fill="x")
@@ -456,115 +483,143 @@ class LaborCalculatorApp:
         tk.Label(title_box, text="M/H(시간당 공임단가)를 적용해 사용자공임 최종 금액을 계산합니다",
                   bg=PAPER, fg=MUTED, font=("Malgun Gothic", 8)).pack(anchor="w", pady=(2, 0))
 
-        btn_box = tk.Frame(top_row, bg=PAPER)
-        btn_box.pack(side="right", anchor="n")
-        for text, command in (("VAT 계산기", self._open_vat_calculator),
-                              ("계산기", self._open_basic_calculator)):
-            tk.Button(
-                btn_box, text=text, command=command,
-                bg="#fffdf9", fg=ACCENT, relief="solid", bd=1,
-                font=("Malgun Gothic", 8, "bold"), highlightbackground=LINE,
-                cursor="hand2",
-            ).pack(side="left", padx=(4, 0), ipadx=4, ipady=2)
+        tk.Button(
+            top_row, text="계산기", command=self._open_basic_calculator,
+            bg=self.CARD_BG, fg=ACCENT, relief="solid", bd=1,
+            font=("Malgun Gothic", 8, "bold"), highlightbackground=LINE,
+            cursor="hand2",
+        ).pack(side="right", anchor="n", ipadx=4, ipady=2)
 
         tk.Frame(head, bg=LINE, height=1).pack(fill="x", pady=(8, 0))
 
-    # ---- STEP 1 ----
-    def _build_step1(self):
-        inner = self._card("STEP 1", "M/H 계산 — 시간당 공임단가")
+    # ---- 1. 시간당 공임단가 및 최종 결과값 ----
+    def _build_section1(self):
+        self._section_title("1. 시간당 공임단가 및 최종 결과값")
+        saved = self._saved("main")
 
-        self.base_amount_var = tk.StringVar(value="61,210")
-        self.base_hour_var = tk.StringVar(value="1.580")
-        self._labeled_entry(inner, "공임금액", self.base_amount_var, "원")
-        self._labeled_entry(inner, "시간", self.base_hour_var, "H")
+        def var(key: str, default: str) -> tk.StringVar:
+            return tk.StringVar(value=str(saved.get(key, default)))
 
-        result_row = tk.Frame(inner, bg=ACCENT_SOFT)
-        result_row.pack(fill="x", pady=(6, 0))
-        pad = tk.Frame(result_row, bg=ACCENT_SOFT)
+        self.base_amount_var = var("base_amount", "61,210")
+        self.base_hour_var = var("base_hour", "1.580")
+        self.ref_amount_var = var("ref_amount", "56,200")
+        self.rate_var = var("rate", "65")
+        times = saved.get("times")
+        if not isinstance(times, list) or not times:
+            times = self.DEFAULT_TIMES
+
+        wrap = tk.Frame(self.root, bg=PAPER)
+        wrap.pack(fill="x", padx=16)
+        wrap.columnconfigure(0, weight=1, uniform="step")
+        wrap.columnconfigure(1, weight=1, uniform="step")
+
+        # STEP 1 (좌)
+        outer1, inner1 = self._card(wrap, "STEP 1", "M/H 계산 — 시간당 공임단가")
+        outer1.grid(row=0, column=0, sticky="nsew", padx=(0, 4))
+        self._labeled_entry(inner1, "공임금액", self.base_amount_var, "원")
+        self._labeled_entry(inner1, "시간", self.base_hour_var, "H")
+        strip = tk.Frame(inner1, bg=ACCENT_SOFT)
+        strip.pack(fill="x", pady=(6, 0))
+        pad = tk.Frame(strip, bg=ACCENT_SOFT)
         pad.pack(fill="x", padx=8, pady=5)
         tk.Label(pad, text="H단가 = 공임금액 ÷ 시간", bg=ACCENT_SOFT, fg=ACCENT,
-                  font=("Consolas", 8)).pack(side="left")
+                  font=("Consolas", 8)).pack(anchor="w")
         self.h_rate_label = tk.Label(pad, text="-", bg=ACCENT_SOFT, fg=ACCENT,
-                                      font=("Consolas", 9, "bold"))
-        self.h_rate_label.pack(side="right")
+                                      font=("Consolas", 11, "bold"))
+        self.h_rate_label.pack(anchor="e")
 
-    # ---- STEP 2 ----
-    def _build_step2(self):
-        inner = self._card("STEP 2", "최종 결과값 계산")
-
-        self.ref_amount_var = tk.StringVar(value="56,200")
-        self._labeled_entry(inner, "기준금액", self.ref_amount_var, "원")
-
-        tk.Label(inner, text="시간(H)", bg="#fffdf9", fg=MUTED,
-                  font=("Malgun Gothic", 9)).pack(anchor="w", pady=(3, 3))
-        self.time_list_frame = tk.Frame(inner, bg="#fffdf9")
+        # STEP 2 (우)
+        outer2, inner2 = self._card(wrap, "STEP 2", "최종 결과값 계산")
+        outer2.grid(row=0, column=1, sticky="nsew", padx=(4, 0))
+        ref_entry = self._labeled_entry(inner2, "기준금액", self.ref_amount_var, "원")
+        self.time_list_frame = tk.Frame(inner2, bg=self.CARD_BG)
         self.time_list_frame.pack(fill="x")
+        self._build_add_time_button(inner2, ref_entry)
+        self._labeled_entry(inner2, "적용율", self.rate_var, "%")
 
-        add_btn = tk.Button(
-            inner, text="+ 시간 추가", command=lambda: self._add_time_row("0"),
-            bg="#fffdf9", fg=ACCENT, relief="solid", bd=1,
-            font=("Malgun Gothic", 9), highlightbackground=LINE,
-        )
-        add_btn.pack(fill="x", pady=(3, 3), ipady=1)
+        self._build_result()
+        for t in times:
+            self._add_time_row(str(t))
 
-        self.rate_var = tk.StringVar(value="65")
-        self._labeled_entry(inner, "적용율", self.rate_var, "%")
+    def _build_add_time_button(self, parent, ref_entry: tk.Entry):
+        # 같은 카드의 입력칸과 위치·크기를 맞춘다(라벨 열 + 입력칸과 같은 폭/높이).
+        parent.update_idletasks()
+        # 입력칸은 ipady=2로 배치되므로 실제 높이는 요청 높이 + 4
+        w, h = ref_entry.winfo_reqwidth(), ref_entry.winfo_reqheight() + 4
+        row = tk.Frame(parent, bg=self.CARD_BG)
+        row.pack(fill="x", pady=2)
+        tk.Label(row, text="", bg=self.CARD_BG, font=("Malgun Gothic", 9),
+                  width=7).pack(side="left")
+        box = tk.Frame(row, width=w, height=h, bg=self.CARD_BG)
+        box.pack(side="left")
+        box.pack_propagate(False)
+        tk.Button(
+            box, text="+ 시간 추가", command=lambda: self._add_time_row("0"),
+            bg=self.CARD_BG, fg=ACCENT, relief="solid", bd=1,
+            font=("Malgun Gothic", 8), highlightbackground=LINE, cursor="hand2",
+        ).pack(fill="both", expand=True)
 
     def _add_time_row(self, value: str):
-        row = tk.Frame(self.time_list_frame, bg="#fffdf9")
+        row = tk.Frame(self.time_list_frame, bg=self.CARD_BG)
         row.pack(fill="x", pady=2)
 
+        tk.Label(row, text="", bg=self.CARD_BG, fg=MUTED,
+                  font=("Malgun Gothic", 9), width=7, anchor="w").pack(side="left")
         var = tk.StringVar(value=value)
-        entry = tk.Entry(row, textvariable=var, justify="right",
-                          font=("Consolas", 10), fg=NUM,
-                          relief="solid", bd=1)
-        entry.pack(side="left", fill="x", expand=True, ipady=2)
+        entry = tk.Entry(row, textvariable=var, justify="right", width=10,
+                          font=("Consolas", 10), fg=NUM, relief="solid", bd=1)
+        entry.pack(side="left", ipady=2)
         entry.bind("<KeyRelease>", lambda e: self.calculate())
-
-        tk.Label(row, text="H", bg="#fffdf9", fg="#a39c8c",
-                  font=("Malgun Gothic", 9)).pack(side="left", padx=(4, 2))
-
-        remove_btn = tk.Button(
-            row, text="×", command=lambda: self._remove_time_row(row, var),
-            bg="#fffdf9", fg="#a39c8c", relief="flat", bd=0,
+        tk.Label(row, text="H", bg=self.CARD_BG, fg="#a39c8c",
+                  font=("Malgun Gothic", 9)).pack(side="left", padx=(4, 0))
+        tk.Button(
+            row, text="×", command=lambda: self._remove_time_row(row),
+            bg=self.CARD_BG, fg="#a39c8c", relief="flat", bd=0,
             font=("Malgun Gothic", 11), cursor="hand2",
-        )
-        remove_btn.pack(side="left")
+        ).pack(side="left")
 
         self.time_rows.append((row, var))
+        self._relabel_time_rows()
         self.calculate()
-        self._fit_to_content()
+        if self._ready:
+            self._fit_to_content()
 
-    def _remove_time_row(self, row: tk.Frame, var: tk.StringVar):
+    def _remove_time_row(self, row: tk.Frame):
         if len(self.time_rows) <= 1:
             return
         self.time_rows = [(r, v) for (r, v) in self.time_rows if r is not row]
         row.destroy()
+        self._relabel_time_rows()
         self.calculate()
         self._fit_to_content()
 
-    # ---- 결과 카드 ----
+    def _relabel_time_rows(self):
+        for i, (row, _var) in enumerate(self.time_rows):
+            row.winfo_children()[0].config(text="시간(H)" if i == 0 else "")
+
     def _build_result(self):
         outer = tk.Frame(self.root, bg=PAPER)
-        outer.pack(fill="x", padx=16, pady=(0, 14))
-
+        outer.pack(fill="x", padx=16, pady=(8, 0))
         card = tk.Frame(outer, bg=INK)
         card.pack(fill="x")
-        inner = tk.Frame(card, bg=INK, padx=16, pady=14)
+        inner = tk.Frame(card, bg=INK, padx=14, pady=8)
         inner.pack(fill="x")
 
-        tk.Label(inner, text="최종 결과값", bg=INK, fg="#a9c2b8",
-                  font=("Malgun Gothic", 8)).pack()
-        self.final_label = tk.Label(inner, text="0원", bg=INK, fg=PAPER,
-                                     font=("Georgia", 24, "bold"))
-        self.final_label.pack(pady=(3, 10))
+        left = tk.Frame(inner, bg=INK)
+        left.pack(side="left")
+        tk.Label(left, text="최종 결과값", bg=INK, fg="#a9c2b8",
+                  font=("Malgun Gothic", 8)).pack(anchor="w")
+        self.final_label = tk.Label(left, text="0원", bg=INK, fg=PAPER,
+                                     font=("Georgia", 22, "bold"))
+        self.final_label.pack(anchor="w")
+        tk.Frame(left, width=190, height=1, bg=INK).pack()
 
-        tk.Frame(inner, bg="#3a493f", height=1).pack(fill="x", pady=(0, 8))
+        tk.Frame(inner, bg="#3a493f", width=1).pack(side="left", fill="y", padx=14)
 
         grid = tk.Frame(inner, bg=INK)
-        grid.pack(fill="x")
+        grid.pack(side="left", fill="x", expand=True)
         for i in range(2):
-            grid.columnconfigure(i, weight=1)
+            grid.columnconfigure(i, weight=1, uniform="bd")
 
         self.breakdown_labels = {}
         specs = [("h_rate", "H단가"), ("total_h", "총 H"),
@@ -572,7 +627,7 @@ class LaborCalculatorApp:
         for idx, (key, label_text) in enumerate(specs):
             r, c = divmod(idx, 2)
             cell = tk.Frame(grid, bg=INK)
-            cell.grid(row=r, column=c, sticky="w", padx=(0, 12), pady=2)
+            cell.grid(row=r, column=c, sticky="w", padx=(0, 10), pady=1)
             tk.Label(cell, text=label_text, bg=INK, fg="#7f9187",
                       font=("Malgun Gothic", 8)).pack(anchor="w")
             val = tk.Label(cell, text="-", bg=INK, fg="#c9d6cd",
@@ -580,7 +635,171 @@ class LaborCalculatorApp:
             val.pack(anchor="w")
             self.breakdown_labels[key] = val
 
-    # ---- 기본 계산기 ----
+    # ---- 2. VAT 계산기 (본문 내장) ----
+    def _build_section_vat(self):
+        self._section_title("2. VAT 계산기", "한쪽에 금액을 입력하면 반대쪽이 자동 계산됩니다 (부가세 10%)")
+        outer = tk.Frame(self.root, bg=self.CARD_BG, highlightbackground=LINE, highlightthickness=1)
+        outer.pack(fill="x", padx=16)
+        inner = tk.Frame(outer, bg=self.CARD_BG, padx=10, pady=8)
+        inner.pack(fill="x")
+        inner.columnconfigure(0, weight=1, uniform="vat")
+        inner.columnconfigure(1, weight=1, uniform="vat")
+
+        saved = self._saved("vat")
+        supply_var = tk.StringVar(value=format_amount(str(saved.get("supply", ""))))
+        vat_total_var = tk.StringVar(value=format_amount(str(saved.get("vat_total", ""))))
+        updating = {"flag": False}
+
+        def persist():
+            self.settings["vat"] = {"supply": supply_var.get(), "vat_total": vat_total_var.get()}
+            save_settings(self.settings)
+
+        def make_cell(col: int, label_text: str, var: tk.StringVar) -> tk.Entry:
+            cell = tk.Frame(inner, bg=self.CARD_BG)
+            cell.grid(row=0, column=col, sticky="w", padx=(0 if col == 0 else 8, 0))
+            tk.Label(cell, text=label_text, bg=self.CARD_BG, fg=MUTED,
+                      font=("Malgun Gothic", 9)).pack(side="left", padx=(0, 6))
+            entry = tk.Entry(cell, textvariable=var, justify="right", width=11,
+                              font=("Consolas", 10), fg=NUM, relief="solid", bd=1)
+            entry.pack(side="left", ipady=2)
+            tk.Label(cell, text="원", bg=self.CARD_BG, fg="#a39c8c",
+                      font=("Malgun Gothic", 9)).pack(side="left", padx=(3, 0))
+            btn = tk.Button(
+                cell, text="복사", bg=self.CARD_BG, fg=ACCENT, relief="solid", bd=1,
+                font=("Malgun Gothic", 8), cursor="hand2",
+            )
+            btn.config(command=lambda: self._copy_to_clipboard(var, btn))
+            btn.pack(side="left", padx=(5, 0))
+            return entry
+
+        vat_entry = make_cell(0, "VAT 합산금액", vat_total_var)
+        supply_entry = make_cell(1, "공급가액", supply_var)
+
+        def reformat(var: tk.StringVar, entry: tk.Entry):
+            # 키 입력이 끝난 뒤(커서 위치가 확정된 시점)에 천단위 콤마를 넣고,
+            # 커서는 같은 숫자 뒤에 유지한다. 상대 칸 값은 이미 계산돼 있으므로 재계산하지 않는다.
+            text = var.get()
+            new = format_amount(text)
+            if new == text:
+                return
+            pos = entry.index("insert")
+            keep = sum(1 for ch in text[:pos] if ch.isdigit() or ch == ".")
+            updating["flag"] = True
+            try:
+                var.set(new)
+            finally:
+                updating["flag"] = False
+            new_pos, count = 0, 0
+            while new_pos < len(new) and count < keep:
+                if new[new_pos].isdigit() or new[new_pos] == ".":
+                    count += 1
+                new_pos += 1
+            entry.icursor(new_pos)
+            persist()
+
+        for var, entry in ((supply_var, supply_entry), (vat_total_var, vat_entry)):
+            entry.bind("<KeyRelease>", lambda e, v=var, en=entry: reformat(v, en))
+            for seq in ("<<Paste>>", "<<Cut>>"):
+                entry.bind(seq, lambda e, v=var, en=entry: en.after_idle(reformat, v, en), add="+")
+
+        def on_supply_change(*_args):
+            if updating["flag"]:
+                return
+            updating["flag"] = True
+            try:
+                text = supply_var.get().strip()
+                vat_total_var.set(f"{round(to_num(text) * VAT_RATE):,}" if text else "")
+            finally:
+                updating["flag"] = False
+            persist()
+
+        def on_vat_change(*_args):
+            if updating["flag"]:
+                return
+            updating["flag"] = True
+            try:
+                text = vat_total_var.get().strip()
+                supply_var.set(f"{round(to_num(text) / VAT_RATE):,}" if text else "")
+            finally:
+                updating["flag"] = False
+            persist()
+
+        supply_var.trace_add("write", on_supply_change)
+        vat_total_var.trace_add("write", on_vat_change)
+
+    # ---- 3. 메모장 ----
+    def _build_section_memo(self):
+        self._section_title("3. 메모장", f"칸을 클릭하면 내용이 복사됩니다 · 칸당 최대 {self.MEMO_MAX}자")
+        grid = tk.Frame(self.root, bg=PAPER)
+        grid.pack(fill="x", padx=16, pady=(0, 12))
+        for c in range(self.MEMO_COLS):
+            grid.columnconfigure(c, weight=1, uniform="memo")
+
+        memos = self.settings.get("memos")
+        if not isinstance(memos, list):
+            memos = []
+
+        for i in range(self.MEMO_COUNT):
+            r, c = divmod(i, self.MEMO_COLS)
+            cell = tk.Frame(grid, bg=self.CARD_BG, highlightbackground=LINE, highlightthickness=1)
+            cell.grid(row=r, column=c, sticky="nsew", padx=3, pady=3)
+            text = tk.Text(cell, width=1, height=4, wrap="word", font=("Malgun Gothic", 9),
+                            bd=0, relief="flat", bg=self.CARD_BG, fg=NUM, padx=6, pady=4,
+                            highlightthickness=0, undo=True)
+            text.pack(fill="both", expand=True)
+            counter = tk.Label(cell, text="", bg=self.CARD_BG, fg="#a39c8c", font=("Consolas", 7))
+            counter.place(relx=1.0, rely=1.0, anchor="se", x=-4, y=-2)
+            if i < len(memos) and isinstance(memos[i], str):
+                text.insert("1.0", memos[i][: self.MEMO_MAX])
+            self.memo_boxes.append(text)
+
+            text.bind("<KeyPress>", self._on_memo_key)
+            text.bind("<KeyRelease>", lambda e, t=text, cl=counter: self._on_memo_edit(t, cl))
+            text.bind("<<Paste>>", lambda e, t=text, cl=counter: t.after_idle(self._on_memo_edit, t, cl))
+            text.bind("<Return>", lambda e: "break")
+            text.bind("<Button-1>", lambda e, t=text, ce=cell, cl=counter: self._copy_memo(t, ce, cl))
+            self._update_counter(text, counter)
+
+    def _on_memo_key(self, event):
+        text = event.widget
+        if event.char and event.char >= " " and event.keysym not in ("Delete", "BackSpace"):
+            has_selection = bool(text.tag_ranges("sel"))
+            if not has_selection and len(text.get("1.0", "end-1c")) >= self.MEMO_MAX:
+                return "break"
+        return None
+
+    def _on_memo_edit(self, text: tk.Text, counter: tk.Label):
+        content = text.get("1.0", "end-1c")
+        fixed = content.replace("\r", "").replace("\n", " ")[: self.MEMO_MAX]
+        if fixed != content:
+            pos = text.index("insert")
+            text.delete("1.0", "end")
+            text.insert("1.0", fixed)
+            text.mark_set("insert", pos)
+        self._update_counter(text, counter)
+        self.settings["memos"] = [t.get("1.0", "end-1c") for t in self.memo_boxes]
+        save_settings(self.settings)
+
+    def _update_counter(self, text: tk.Text, counter: tk.Label):
+        n = len(text.get("1.0", "end-1c"))
+        counter.config(text=f"{n}/{self.MEMO_MAX}" if n else "")
+
+    def _copy_memo(self, text: tk.Text, cell: tk.Frame, counter: tk.Label):
+        content = text.get("1.0", "end-1c").strip()
+        if not content:
+            return
+        self.root.clipboard_clear()
+        self.root.clipboard_append(content)
+        cell.config(highlightbackground=ACCENT)
+        counter.config(text="복사됨", fg=ACCENT)
+
+        def restore():
+            cell.config(highlightbackground=LINE)
+            counter.config(fg="#a39c8c")
+            self._update_counter(text, counter)
+        self.root.after(800, restore)
+
+    # ---- 기본 계산기 (팝업) ----
     def _open_basic_calculator(self):
         if self._calc_win is not None and self._calc_win.winfo_exists():
             self._calc_win.deiconify()
@@ -595,101 +814,15 @@ class LaborCalculatorApp:
         calc.focus_input()
         self._calc_win = win
 
-    # ---- 이벤트 계산기: 공급가액/VAT 합산금액 ----
-    def _open_vat_calculator(self):
-        if self._vat_win is not None and self._vat_win.winfo_exists():
-            self._vat_win.deiconify()
-            self._vat_win.lift()
-            self._vat_win.focus_force()
-            return
-        win = tk.Toplevel(self.root)
-        self._vat_win = win
-        win.title("공급가액 및 VAT 합산금액 산출")
-        win.configure(bg=PAPER)
-        win.resizable(False, False)
-
-        tk.Label(win, text="공급가액 및 VAT 합산금액 산출", bg=PAPER, fg=INK,
-                  font=("Georgia", 13, "bold")).pack(anchor="w", padx=16, pady=(14, 2))
-        tk.Label(win, text="한쪽에 금액을 입력하면 반대쪽이 자동으로 계산됩니다 (부가세 10% 기준)",
-                  bg=PAPER, fg=MUTED, font=("Malgun Gothic", 8)).pack(
-            anchor="w", padx=16, pady=(0, 10))
-
-        card = tk.Frame(win, bg="#fffdf9", highlightbackground=LINE, highlightthickness=1)
-        card.pack(fill="x", padx=16, pady=(0, 16))
-        inner = tk.Frame(card, bg="#fffdf9", padx=14, pady=12)
-        inner.pack(fill="x")
-
-        saved = self.settings.get("vat", {})
-        supply_var = tk.StringVar(value=str(saved.get("supply", "")))
-        vat_total_var = tk.StringVar(value=str(saved.get("vat_total", "")))
-        updating = {"flag": False}
-
-        def persist():
-            self.settings["vat"] = {"supply": supply_var.get(), "vat_total": vat_total_var.get()}
-            save_settings(self.settings)
-
-        def make_row(label_text: str, var: tk.StringVar) -> tk.Entry:
-            row = tk.Frame(inner, bg="#fffdf9")
-            row.pack(fill="x", pady=5)
-            tk.Label(row, text=label_text, bg="#fffdf9", fg=MUTED,
-                      font=("Malgun Gothic", 9), width=10, anchor="w").pack(side="left")
-            entry = tk.Entry(row, textvariable=var, justify="right",
-                              font=("Consolas", 11), fg=NUM,
-                              relief="solid", bd=1)
-            entry.pack(side="left", fill="x", expand=True, ipady=3)
-            tk.Label(row, text="원", bg="#fffdf9", fg="#a39c8c",
-                      font=("Malgun Gothic", 9), width=2).pack(side="left")
-            copy_btn = tk.Button(
-                row, text="복사", bg="#fffdf9", fg=ACCENT, relief="solid", bd=1,
-                font=("Malgun Gothic", 8), cursor="hand2",
-            )
-            copy_btn.config(command=lambda: self._copy_to_clipboard(win, var, copy_btn))
-            copy_btn.pack(side="left", padx=(6, 0))
-            return entry
-
-        vat_entry = make_row("VAT 합산금액", vat_total_var)
-        make_row("공급가액", supply_var)
-
-        def on_supply_change(*_args):
-            if updating["flag"]:
-                return
-            updating["flag"] = True
-            try:
-                text = supply_var.get().strip()
-                n = to_num(text)
-                vat_total_var.set(f"{round(n * VAT_RATE):,}" if text else "")
-            finally:
-                updating["flag"] = False
-            persist()
-
-        def on_vat_change(*_args):
-            if updating["flag"]:
-                return
-            updating["flag"] = True
-            try:
-                text = vat_total_var.get().strip()
-                n = to_num(text)
-                supply_var.set(f"{round(n / VAT_RATE):,}" if text else "")
-            finally:
-                updating["flag"] = False
-            persist()
-
-        supply_var.trace_add("write", on_supply_change)
-        vat_total_var.trace_add("write", on_vat_change)
-
-        fit_to_content(win, min_width=340)
-        vat_entry.focus_set()
-        vat_entry.select_range(0, "end")  # 이전 값이 복원돼 있어도 바로 덮어써서 입력 가능
-
-    def _copy_to_clipboard(self, win: tk.Toplevel, var: tk.StringVar, button: tk.Button):
+    def _copy_to_clipboard(self, var: tk.StringVar, button: tk.Button):
         value = var.get().strip()
         if not value:
             return
-        win.clipboard_clear()
-        win.clipboard_append(value)
+        self.root.clipboard_clear()
+        self.root.clipboard_append(value)
         original = button.cget("text")
         button.config(text="복사됨")
-        win.after(1000, lambda: button.config(text=original))
+        self.root.after(1000, lambda: button.config(text=original))
 
     # ---- 계산 ----
     def calculate(self):
@@ -710,6 +843,16 @@ class LaborCalculatorApp:
         self.breakdown_labels["total_h"].config(text=f"{fmt_num(total_h, 2)}H")
         self.breakdown_labels["sum"].config(text=fmt_won(subtotal))
         self.breakdown_labels["rate"].config(text=f"{fmt_num(rate, 0)}%")
+
+        if self._ready:
+            self.settings["main"] = {
+                "base_amount": self.base_amount_var.get(),
+                "base_hour": self.base_hour_var.get(),
+                "ref_amount": self.ref_amount_var.get(),
+                "times": [v.get() for _, v in self.time_rows],
+                "rate": self.rate_var.get(),
+            }
+            save_settings(self.settings)
 
 
 def main():
