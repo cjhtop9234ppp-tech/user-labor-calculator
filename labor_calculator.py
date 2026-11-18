@@ -11,7 +11,9 @@ from decimal import Decimal, InvalidOperation, localcontext
 from pathlib import Path
 from tkinter import ttk
 
-__version__ = "1.3.0"
+from window_shade import Tray, close_other_instances, hide_from_taskbar, install_title_shade, tab_slot_from_argv
+
+__version__ = "1.3.13"
 
 INK = "#1c2b26"
 PAPER = "#f6f4ee"
@@ -385,6 +387,7 @@ class BasicCalculator:
 
 class LaborCalculatorApp:
     CARD_BG = "#fffdf9"
+    FINAL_CAPTION = "최종 결과값 · 클릭하면 복사"
     MEMO_COUNT = 6
     MEMO_COLS = 3
     MEMO_MAX = 50
@@ -394,6 +397,13 @@ class LaborCalculatorApp:
         self.root = root
         root.title(f"사용자공임 산출 계산기(M/H적용) v{__version__}")
         root.configure(bg=PAPER)
+        self._shade = install_title_shade(root, app_id="labor")  # 제목 표시줄 더블클릭: 접기/펴기
+        close_other_instances("labor")  # 이미 떠 있는 사용자공임 계산기는 닫고 이 창으로 대신한다
+        slot = tab_slot_from_argv()  # 3종세트 버튼으로 실행되면 정해진 자리의 접힌 제목 칸으로 시작한다
+        if slot:
+            root.after(300, lambda: self._shade.collapse_at(*slot))
+        hide_from_taskbar(root)  # 작업표시줄에는 올리지 않는다
+        self._tray = Tray(root, "사용자공임 계산기")
 
         self.settings = load_settings()
         self._calc_win: tk.Toplevel | None = None
@@ -607,12 +617,18 @@ class LaborCalculatorApp:
 
         left = tk.Frame(inner, bg=INK)
         left.pack(side="left")
-        tk.Label(left, text="최종 결과값", bg=INK, fg="#a9c2b8",
-                  font=("Malgun Gothic", 8)).pack(anchor="w")
+        self.final_caption = tk.Label(left, text=self.FINAL_CAPTION, bg=INK, fg="#a9c2b8",
+                                       font=("Malgun Gothic", 8))
+        self.final_caption.pack(anchor="w")
         self.final_label = tk.Label(left, text="0원", bg=INK, fg=PAPER,
                                      font=("Georgia", 22, "bold"))
         self.final_label.pack(anchor="w")
         tk.Frame(left, width=190, height=1, bg=INK).pack()
+        self.final_value = 0
+        self._final_flash_id = None
+        for w in (left, self.final_caption, self.final_label):
+            w.config(cursor="hand2")
+            w.bind("<Button-1>", lambda e: self._copy_final())
 
         tk.Frame(inner, bg="#3a493f", width=1).pack(side="left", fill="y", padx=14)
 
@@ -814,6 +830,19 @@ class LaborCalculatorApp:
         calc.focus_input()
         self._calc_win = win
 
+    def _copy_final(self):
+        # VAT 복사와 같은 형식: 천단위 콤마만 넣고 "원"은 붙이지 않는다(입력창에 바로 붙여넣기 위해)
+        self.root.clipboard_clear()
+        self.root.clipboard_append(f"{self.final_value:,}")
+        self.final_caption.config(text="복사됨", fg="#7fe0b0")
+        if self._final_flash_id is not None:
+            self.root.after_cancel(self._final_flash_id)
+        self._final_flash_id = self.root.after(800, self._restore_final_caption)
+
+    def _restore_final_caption(self):
+        self._final_flash_id = None
+        self.final_caption.config(text=self.FINAL_CAPTION, fg="#a9c2b8")
+
     def _copy_to_clipboard(self, var: tk.StringVar, button: tk.Button):
         value = var.get().strip()
         if not value:
@@ -838,6 +867,7 @@ class LaborCalculatorApp:
         subtotal = round(ref_amount + total_h * h_rate)
         final = round(subtotal * (rate / 100))
 
+        self.final_value = final
         self.final_label.config(text=fmt_won(final))
         self.breakdown_labels["h_rate"].config(text=f"{fmt_won(h_rate)}/H")
         self.breakdown_labels["total_h"].config(text=f"{fmt_num(total_h, 2)}H")
